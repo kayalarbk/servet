@@ -48,7 +48,7 @@ window.Store = (function () {
         theme: 'navy-gold',
         locale: 'tr-TR',
         autoPrices: true,          // piyasa fiyatı çekimi — daima açık (ayar kaldırıldı)
-        stockPrices: false,        // hisse/ETF fiyatı (dış vekil kullanır, opsiyonel)
+        stockPrices: true,         // hisse/ETF fiyatı — daima açık (ayar kaldırıldı)
         autoRates: true,           // döviz kuru çekimi — daima açık (ayar kaldırıldı)
         assetTypes: [],            // kurulum testinde seçilen türler; boş = tümü
         showSplash: true,          // giriş animasyonu
@@ -103,6 +103,7 @@ window.Store = (function () {
     s.settings.autoRates = true;
     s.settings.autoPrices = true;
     s.settings.snapshotDaily = true;   // günlük kayıt artık her değişiklikte otomatik
+    s.settings.stockPrices = true;     // hisse fiyatı çekimi artık ayar değil
     if (!Array.isArray(s.settings.assetTypes)) s.settings.assetTypes = [];
     s.settings.assetTypes = s.settings.assetTypes
       .filter(id => DATA.ASSET_TYPES.some(t => t.id === id));
@@ -176,6 +177,9 @@ window.Store = (function () {
     const willFetch = a.autoPrice && (a.symbol || a.type === 'cash');
     if (isBlank(a.unitPrice) && !willFetch) errors.unitPrice = 'Güncel birim değeri girin.';
     else if (!isBlank(a.unitPrice) && (isNaN(p) || p < 0)) errors.unitPrice = 'Birim değer 0 veya daha büyük olmalıdır.';
+    if (!isBlank(a.costCurrency) && !DATA.CURRENCIES.some(c => c.code === String(a.costCurrency).toUpperCase())) {
+      errors.costCurrency = 'Maliyet para birimi geçersiz.';
+    }
     if (!isBlank(a.unitCost) && (isNaN(parseNum(a.unitCost)) || parseNum(a.unitCost) < 0)) {
       errors.unitCost = 'Alış maliyeti geçerli bir sayı olmalıdır.';
     }
@@ -200,6 +204,10 @@ window.Store = (function () {
       unit: a.unit || DATA.assetType(a.type).unit,
       unitPrice: parseNum(a.unitPrice) || 0,
       unitCost: isBlank(a.unitCost) ? null : (parseNum(a.unitCost) || 0),
+      // Maliyetin tutulduğu para birimi. Boşsa varlığın kendi para birimi geçerlidir.
+      // Döviz nakitte "1 USD kaç TRY'ye alındı" bilgisini taşımak için gerekir;
+      // aksi halde 1000 USD'nin maliyeti daima 1000 USD olur ve kur kârı görünmez.
+      costCurrency: isBlank(a.costCurrency) ? null : String(a.costCurrency).toUpperCase(),
       currency: a.currency,
       acquiredAt: a.acquiredAt || null,
       location: {
@@ -563,7 +571,8 @@ window.Store = (function () {
     const proceeds = convert(qty * price, cur, a.currency) - convert(fee, cur, a.currency);
     const method = input.costMethod || state.settings.costMethod || 'fifo';
     const consumed = consumeLots(a, qty, method);       // lotları tüketir
-    const costBasis = consumed.costBasis;
+    // Lot maliyetleri costCurrency cinsindendir; hasılatla aynı birime çevrilir.
+    const costBasis = consumed.costBasis == null ? null : costToAssetCur(a, consumed.costBasis);
     const realized = costBasis == null ? null : proceeds - costBasis;
     const closed = qty >= a.quantity - 1e-9;
 
@@ -737,20 +746,24 @@ window.Store = (function () {
   function autoPriceStatus() {
     const auto = state.assets.filter(a => a.autoPrice);
     const needsSymbol = auto.filter(a => !a.symbol && a.type !== 'cash');
-    const stockOff = auto.filter(a => (a.type === 'stock' || a.type === 'etf') && !state.settings.stockPrices);
+
     const eligible = state.assets.filter(a => DATA.assetType(a.type).priceable);
     return {
       auto: auto.length,
       eligible: eligible.length,
       notTracked: eligible.filter(a => !a.autoPrice).length,
-      needsSymbol, stockOff,
+      needsSymbol,
       lastAt: state.cache.pricesAt || 0
     };
   }
 
   const assetValue = (a, cur) => convert(a.quantity * a.unitPrice, a.currency, cur || state.settings.baseCurrency);
+  /* Maliyet kendi para biriminden (costCurrency) çevrilir; böylece döviz nakitte
+     alış kuru ile bugünkü kur arasındaki fark kâr/zarar olarak görünür. */
+  const costCurrency = a => a.costCurrency || a.currency;
+  const costToAssetCur = (a, v) => convert(v, costCurrency(a), a.currency);
   const assetCost = (a, cur) =>
-    a.unitCost == null ? NaN : convert(a.quantity * a.unitCost, a.currency, cur || state.settings.baseCurrency);
+    a.unitCost == null ? NaN : convert(a.quantity * a.unitCost, costCurrency(a), cur || state.settings.baseCurrency);
 
   function totals(cur) {
     const c = cur || state.settings.baseCurrency;
@@ -1039,13 +1052,13 @@ window.Store = (function () {
   function exportAssetsCSV() {
     const cur = state.settings.baseCurrency;
     const head = ['Ad', 'Tür', 'Sembol', 'Miktar', 'Birim', 'Birim Değer', 'Para Birimi',
-      'Toplam (' + cur + ')', 'Alış Maliyeti', 'Kâr/Zarar (' + cur + ')',
+      'Toplam (' + cur + ')', 'Alış Maliyeti', 'Maliyet Para Birimi', 'Kâr/Zarar (' + cur + ')',
       'Saklama Türü', 'Kurum/Yer', 'Hesap', 'Edinme Tarihi', 'Not'];
     const rows = state.assets.map(a => {
       const v = assetValue(a, cur), k = assetCost(a, cur);
       return [a.name, DATA.assetType(a.type).name, a.symbol, a.quantity, a.unit, a.unitPrice,
         a.currency, isNaN(v) ? '' : v.toFixed(2), a.unitCost == null ? '' : a.unitCost,
-        isNaN(k) || isNaN(v) ? '' : (v - k).toFixed(2),
+        costCurrency(a), isNaN(k) || isNaN(v) ? '' : (v - k).toFixed(2),
         DATA.locationKind(a.location.kind).name, a.location.name, a.location.account,
         a.acquiredAt || '', a.notes];
     });
@@ -1151,7 +1164,8 @@ window.Store = (function () {
     addLot: stamped(addLot), removeLot: stamped(removeLot),
     get sales() { return state.sales; },
     addManualTx, clearTransactions, deleteTx, updateTxNote,
-    convert, assetValue, assetCost, totals, byType, byLocationKind, byLocationName, byCurrency,
+    convert, assetValue, assetCost, costCurrency, costToAssetCur,
+    totals, byType, byLocationKind, byLocationName, byCurrency,
     locLabel, takeSnapshot, series, seriesFrom, performance, performanceSince,
     missingRates, cashAssets, markBackedUp, backupStatus, autoPriceStatus,
     rebalancePlan, setTargets,

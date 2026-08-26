@@ -220,11 +220,6 @@
             if (!z.autoPrice) { z.autoPrice = true; S.save(); }
             const r = await Market.fetchOne(z);
             if (r.ok) ok++;
-            else if (r.needsStockToggle) {
-              S.settings.stockPrices = true; S.save();
-              const r2 = await Market.fetchOne(z);
-              if (r2.ok) ok++;
-            }
           }
           toast(ok ? `${ok} varlığın fiyatı çekildi.` : 'Fiyatlar çekilemedi — ürün/sembol seçili mi kontrol edin.',
             ok ? 'ok' : 'err');
@@ -804,10 +799,29 @@
   /* Sembol alanı, varlık türüne göre değişir:
      altın/gümüş -> kapalıçarşı ürün listesi, kripto -> bilinen semboller,
      hisse/ETF -> serbest sembol (BIST için .IS otomatik denenir). */
+  /* Nakit için "ürün" satırı para birimi seçimidir: TL ve dövizler burada,
+     Detaylar'a gömülü açılır listede değil. */
+  const CASH_QUICK = ['TRY', 'USD', 'EUR', 'GBP', 'CHF'];
+  function cashFieldHTML(cur) {
+    const base = S.settings.baseCurrency;
+    const quick = CASH_QUICK.filter(c => DATA.CURRENCIES.some(x => x.code === c));
+    const list = quick.includes(cur) ? quick : quick.concat(cur);
+    return `<label>Hangi para birimi?</label>
+      <div class="chip-row" id="cashCurs">
+        ${list.map(c => `<button type="button" class="chip ${c === cur ? 'active' : ''}" data-cashcur="${c}">
+          ${DATA.currency(c).symbol === c ? '' : esc(DATA.currency(c).symbol) + ' '}${esc(c)}</button>`).join('')}
+        <button type="button" class="chip chip-more" data-cashcur="__more">Diğer…</button>
+      </div>
+      <span class="hint">${cur === base
+        ? `${esc(cur)} nakitte alış maliyeti tutarın kendisidir — kâr/zarar oluşmaz, bu yüzden maliyet sorulmaz.`
+        : `Alış kurunu girerseniz ${esc(cur)} → ${esc(base)} kur farkı kâr/zarar olarak görünür.`}</span>`;
+  }
+
   function symbolFieldHTML(type, value) {
     const v = value || '';
     const hidden = `<input type="hidden" id="fSymbol" name="symbol" value="${esc(v)}">`;
 
+    if (type === 'cash') return cashFieldHTML(v || S.settings.baseCurrency) + hidden;
     if (type === 'gold' || type === 'silver') {
       const q = DATA.metalQuote(v);
       return `<label>Ürün (otomatik fiyat)</label>
@@ -824,7 +838,7 @@
       return `<label>${type === 'etf' ? 'ETF / fon' : 'Hisse senedi'}</label>
         ${pickerButton('symbol', v, found ? found.name + ' · ' + found.market : (v ? 'Özel sembol' : ''),
           'Şirket veya sembol seçin — THYAO, AAPL…')}
-        ${hidden}<span class="hint">Ayarlar → “Hisse / ETF fiyatlarını çek” açıkken otomatik güncellenir.</span>`;
+        ${hidden}<span class="hint">Fiyat her yenilemede otomatik güncellenir.</span>`;
     }
     return `<label for="fSymbol">Sembol / kod</label>
       <input id="fSymbol" name="symbol" value="${esc(v)}" placeholder="Serbest kod">
@@ -837,7 +851,7 @@
       return 'Seçtiğiniz ürünün kapalıçarşı fiyatı (TRY) her yenilemede güncellenir.';
     if (type === 'crypto') return 'CoinGecko üzerinden anlık USD fiyatı çekilir, para biriminize çevrilir.';
     if (type === 'stock' || type === 'etf')
-      return 'Yahoo Finance üzerinden fiyat çekilir. Ayarlar → “Hisse / ETF fiyatlarını çek” açık olmalıdır.';
+      return 'Yahoo Finance üzerinden fiyat her yenilemede otomatik çekilir.';
     return 'Bu varlık türü için otomatik fiyat kaynağı yok; değeri elle girin.';
   }
 
@@ -962,7 +976,7 @@
         <p class="section-label">Ne ekliyorsunuz?</p>
         <div class="form-grid">
           <div id="symbolSlot" class="span-full"></div>
-          <div class="field span-full" id="symbolWrap">${symbolFieldHTML(a.type, a.symbol)}</div>
+          <div class="field span-full" id="symbolWrap">${symbolFieldHTML(a.type, a.type === 'cash' ? a.currency : a.symbol)}</div>
           <div class="field span-full">
             <label for="fName">Varlık adı *</label>
             <input id="fName" name="name" maxlength="80" value="${esc(a.name)}" placeholder="Örn. Gram Altın, THYAO, Dolar Birikim">
@@ -1084,31 +1098,53 @@
         if (hint) hint.textContent = 'Bu tür için değeri siz belirlersiniz.';
       }
       const unitTag = $('#qtyUnit', back);
-      if (unitTag) unitTag.textContent = $('#fUnit', back) ? $('#fUnit', back).value : '';
+      const curNow = $('#fCur', back) ? $('#fCur', back).value : '';
+      // Nakitte "miktar/birim" yerine doğrudan tutar ve para birimi yazar
+      if (unitTag) unitTag.textContent = type === 'cash' ? curNow
+        : ($('#fUnit', back) ? $('#fUnit', back).value : '');
+      const qtyLabel = $('#fQty', back) && $('#fQty', back).closest('.field').querySelector('label');
+      if (qtyLabel) qtyLabel.childNodes[0].nodeValue = type === 'cash' ? 'Tutar * ' : 'Miktar * ';
       const cur = $('#fCur', back) ? $('#fCur', back).value : '';
       const cc = $('#costCur', back), pc = $('#priceCur', back);
       if (cc) cc.textContent = cur;
       if (pc) pc.textContent = cur;
-      // Nakitte alış maliyeti anlamsız (1'e 1)
+      /* Nakitte maliyet: raporlama para biriminde tutulan nakitte anlamsızdır
+         (1'e 1), dövizde ise alış kuru kâr/zararı belirler. */
       const costField = $('#costField', back);
-      if (costField) costField.style.display = type === 'cash' ? 'none' : '';
+      const base = S.settings.baseCurrency;
+      if (costField) {
+        const hideCost = type === 'cash' && cur === base;
+        costField.style.display = hideCost ? 'none' : '';
+        const lbl = costField.querySelector('label'), hint = costField.querySelector('.hint');
+        if (type === 'cash') {
+          if (lbl) lbl.innerHTML = `Alış kuru — 1 ${esc(cur)} kaç ${esc(base)}? <small class="unit-tag" id="costCur">${esc(base)}</small>`;
+          if (hint) hint.textContent = 'Ortalama alış kurunuz. Boş bırakırsanız kur farkı kâr/zarara yansımaz.';
+        } else {
+          if (lbl) lbl.innerHTML = `Alış maliyeti <small class="unit-tag" id="costCur">${esc(cur)}</small>`;
+          if (hint) hint.textContent = 'Birim başına. Kâr/zarar için — boş bırakılabilir.';
+        }
+      }
 
       /* Otomatik fiyatı olmayan türlerde "sembol / kod" alanı gürültüdür:
          alanı Detaylar bölümüne taşı (değer korunur), fiyatlanabilir
          türlerde tekrar öne al. */
       const wrap = $('#symbolWrap', back), slot = $('#symbolSlot', back), advBody = $('.adv-body', back);
       if (wrap && slot && advBody) {
-        const priceable = DATA.assetType(type).priceable;
-        const wantParent = priceable ? slot.parentElement : advBody;
-        if (priceable && wrap.previousElementSibling !== slot) slot.after(wrap);
-        else if (!priceable && wrap.parentElement !== advBody) advBody.prepend(wrap);
-        wrap.classList.toggle('span-full', priceable);
-        wrap.style.display = (priceable || type === 'other') ? '' : '';
+        // Nakitte bu alan para birimi seçimidir; fiyatlanabilir türler gibi öne alınır.
+        const inMain = DATA.assetType(type).priceable || type === 'cash';
+        if (inMain && wrap.previousElementSibling !== slot) slot.after(wrap);
+        else if (!inMain && wrap.parentElement !== advBody) advBody.prepend(wrap);
+        wrap.classList.toggle('span-full', inMain);
       }
     }
     syncTypeFields();
     back.addEventListener('change', e => {
-      if (['fAuto', 'fCur', 'fUnit', 'fSymbol'].includes(e.target.id)) syncTypeFields();
+      if (!['fAuto', 'fCur', 'fUnit', 'fSymbol'].includes(e.target.id)) return;
+      // Detaylar'daki para birimi değişince nakit çipleri de güncellenmeli
+      if (e.target.id === 'fCur' && type === 'cash') {
+        $('#symbolWrap', back).innerHTML = symbolFieldHTML('cash', e.target.value);
+      }
+      syncTypeFields();
     });
 
     function refreshLocList() {
@@ -1133,12 +1169,12 @@
       type = c.dataset.type;
       $$('#typeChips .chip', back).forEach(x => x.classList.toggle('active', x === c));
       const t = DATA.assetType(type);
-      $('#symbolWrap', back).innerHTML = symbolFieldHTML(type, '');
-      $('#fSymbol', back) && ($('#fSymbol', back).value = '');
       if (!isEdit) {
         $('#fUnit', back).value = t.unit;
         $('#fCur', back).value = t.defaultCurrency;
       }
+      $('#symbolWrap', back).innerHTML = symbolFieldHTML(type, type === 'cash' ? $('#fCur', back).value : '');
+      $('#fSymbol', back) && ($('#fSymbol', back).value = '');
       if (t.id === 'cash') $('#fPrice', back).value = 1;
       $('#fAuto', back).disabled = !t.priceable;
       $('#fAuto', back).checked = t.priceable && !isEdit;
@@ -1154,6 +1190,27 @@
       $('#fUnit', back).value = q.unit;
       $('#fCur', back).value = 'TRY';
       $('#fAuto', back).checked = true;
+    });
+
+    // Nakit para birimi seçimi
+    back.addEventListener('click', e => {
+      const c = e.target.closest('[data-cashcur]');
+      if (!c) return;
+      const pick = code => {
+        $('#fCur', back).value = code;
+        $('#symbolWrap', back).innerHTML = symbolFieldHTML('cash', code);
+        if (!$('#fName', back).value.trim()) $('#fName', back).value = DATA.currency(code).name;
+        syncTypeFields();
+      };
+      if (c.dataset.cashcur === '__more') {
+        openPicker({
+          title: '💵 Para birimi seç', placeholder: 'Ara: dolar, euro, sterlin…',
+          value: $('#fCur', back).value,
+          groups: [{ label: 'Para birimleri', items: DATA.CURRENCIES.map(x =>
+            ({ value: x.code, code: x.code, name: x.name, tag: x.symbol })) }],
+          onPick: item => pick(item.value)
+        });
+      } else pick(c.dataset.cashcur);
     });
 
     $('#kindChips', back).addEventListener('click', e => {
@@ -1201,7 +1258,13 @@
         quantity: $('#fQty', back).value,
         unit: $('#fUnit', back).value.trim() || DATA.assetType(type).unit,
         unitPrice: type === 'cash' ? 1 : $('#fPrice', back).value,
-        unitCost: $('#fCost', back).value,
+        // Döviz nakitte maliyet alış kuru olarak raporlama para biriminde tutulur;
+        // raporlama para birimindeki nakitte maliyet tutarın kendisidir (1'e 1).
+        unitCost: type === 'cash'
+          ? ($('#fCur', back).value === S.settings.baseCurrency ? 1 : $('#fCost', back).value)
+          : $('#fCost', back).value,
+        costCurrency: type === 'cash' && $('#fCur', back).value !== S.settings.baseCurrency
+          ? S.settings.baseCurrency : null,
         currency: $('#fCur', back).value,
         acquiredAt: $('#fDate', back).value || null,
         autoPrice: $('#fAuto', back).checked,
@@ -1251,19 +1314,6 @@
         toast(`${asset.name} için birim değer 0 — “Fiyatı otomatik güncelle”yi açın veya değeri elle girin.`, 'err');
       }
       return;
-    }
-    const isStock = asset.type === 'stock' || asset.type === 'etf';
-    if (isStock && !S.settings.stockPrices) {
-      const ok = await confirmDialog('Hisse fiyatı çekimi kapalı',
-        `<b>${esc(asset.name)}</b> fiyatını çekebilmek için Ayarlar'daki “Hisse / ETF fiyatlarını çek”
-         seçeneği açık olmalı. Bu, Yahoo Finance verisini bir okuma vekili üzerinden alır;
-         servise yalnızca <b>sembol</b> gider, portföyünüz gitmez. Şimdi açalım mı?`, 'Aç ve çek');
-      if (!ok) {
-        toast('Hisse fiyatı çekilmedi — değeri elle girebilirsiniz.', 'err');
-        return;
-      }
-      S.settings.stockPrices = true;
-      S.save();
     }
     const r = await Market.fetchOne(asset);
     if (r.ok) {
@@ -1374,7 +1424,7 @@
       <div class="modal-body">
         <div class="panel"><ul class="stat-list">
           <li><span>Mevcut miktar</span><b>${S.fmtNum(a2.quantity, 6)} ${esc(a2.unit)}</b></li>
-          <li><span>Ortalama maliyet</span><b>${a2.unitCost == null ? 'yok' : S.fmtMoney(a2.unitCost, cur)}</b></li>
+          <li><span>Ortalama maliyet</span><b>${a2.unitCost == null ? 'yok' : S.fmtMoney(a2.unitCost, S.costCurrency(a2))}</b></li>
           <li><span>Güncel birim değer</span><b>${S.fmtMoney(a2.unitPrice, cur)}</b></li>
           <li><span>Kayıtlı alım (lot)</span><b>${(a2.lots || []).length}</b></li>
         </ul></div>
@@ -1385,7 +1435,7 @@
             <span class="err"></span>
           </div>
           <div class="field">
-            <label for="bCost">Birim alış fiyatı (${esc(cur)}) *</label>
+            <label for="bCost">Birim alış fiyatı (${esc(S.costCurrency(a2))}) *</label>
             <input id="bCost" type="text" inputmode="decimal" value="${a2.unitPrice || ''}">
             <span class="err"></span>
           </div>
@@ -1466,12 +1516,12 @@
           <thead><tr><th>Tarih</th><th class="num">Miktar</th><th class="num">Birim maliyet</th>
             <th class="num">Toplam</th><th class="num">Güncel K/Z</th><th></th></tr></thead>
           <tbody>${lots.map(l => {
-            const pl = (asset.unitPrice - l.unitCost) * l.quantity;
+            const pl = (asset.unitPrice - S.costToAssetCur(asset, l.unitCost)) * l.quantity;
             return `<tr>
               <td>${esc(S.fmtDate(l.date))}${l.note ? `<br><small class="muted">${esc(l.note)}</small>` : ''}</td>
               <td class="num">${S.fmtNum(l.quantity, 6)} <small class="muted">${esc(asset.unit)}</small></td>
-              <td class="num">${S.fmtMoney(l.unitCost, cur)}</td>
-              <td class="num">${S.fmtMoney(l.quantity * l.unitCost, cur)}</td>
+              <td class="num">${S.fmtMoney(l.unitCost, S.costCurrency(asset))}</td>
+              <td class="num">${S.fmtMoney(l.quantity * l.unitCost, S.costCurrency(asset))}</td>
               <td class="num"><span class="delta ${pl >= 0 ? 'up' : 'down'}">${S.fmtMoney(pl, cur)}</span></td>
               <td><button class="btn btn-sm btn-danger" data-lot="${l.id}" aria-label="Lotu sil">✕</button></td>
             </tr>`;
@@ -1505,7 +1555,7 @@
         <div class="panel"><ul class="stat-list">
           <li><span>Elinizdeki miktar</span><b>${S.fmtNum(a.quantity, 6)} ${esc(a.unit)}</b></li>
           <li><span>Güncel birim değer</span><b>${S.fmtMoney(a.unitPrice, cur)}</b></li>
-          <li><span>Alış maliyeti (birim)</span><b>${a.unitCost == null ? 'girilmemiş' : S.fmtMoney(a.unitCost, cur)}</b></li>
+          <li><span>Alış maliyeti (birim)</span><b>${a.unitCost == null ? 'girilmemiş' : S.fmtMoney(a.unitCost, S.costCurrency(a))}</b></li>
           <li><span>Nerede</span><b>${esc(S.locLabel(a.location))}</b></li>
         </ul></div>
         <div class="panel"><div class="form-grid">
@@ -1568,7 +1618,8 @@
       if (isNaN(q) || isNaN(p) || q <= 0) { $('#sPreview', back).textContent = 'Miktar ve fiyatı girin.'; return; }
       const proceeds = q * p - f;
       const pv = S.previewCost(a.id, q, val('#sMethod'));
-      const cost = pv && pv.costBasis != null ? pv.costBasis : (a.unitCost == null ? null : q * a.unitCost);
+      const costRaw = pv && pv.costBasis != null ? pv.costBasis : (a.unitCost == null ? null : q * a.unitCost);
+      const cost = costRaw == null ? null : S.costToAssetCur(a, costRaw);
       const pl = cost == null ? null : proceeds - cost;
       const kalan = Math.max(0, a.quantity - q);
       const toSel = $('#sTo', back).value;
@@ -1583,7 +1634,7 @@
         ` · kalan <b>${esc(S.fmtNum(kalan, 6))} ${esc(a.unit)}</b>` +
         (pv && pv.breakdown && pv.breakdown.length > 1
           ? `<br><small class="muted">Maliyet esası: ` +
-            pv.breakdown.map(b => `${esc(S.fmtNum(b.quantity, 4))} × ${esc(S.fmtMoney(b.unitCost, cur))}` +
+            pv.breakdown.map(b => `${esc(S.fmtNum(b.quantity, 4))} × ${esc(S.fmtMoney(b.unitCost, S.costCurrency(a)))}` +
               (b.date && b.date !== '—' ? ` (${esc(S.fmtDate(b.date))})` : '')).join(' + ') + '</small>'
           : '');
     }
@@ -2208,12 +2259,10 @@
               piyasa fiyatı (altın/gümüş kapalıçarşı · finans.truncgil.com, kripto · CoinGecko)
               <b>her zaman</b> çekilir. Bu istekler kişisel veri taşımaz, kapatılmalarına gerek yoktur;
               tek tek varlıklarda çekimi kapatmak için varlığın “Fiyatı otomatik güncelle” anahtarını kullanın.</p>
-            <div class="switch-row"><div><strong style="font-size:13.5px">Hisse / ETF fiyatlarını çek</strong>
-              <p>Yahoo Finance verisi, tarayıcıdan doğrudan erişilemediği için bir okuma vekili
-                 (<b>r.jina.ai</b>, olmazsa allorigins / corsproxy) üzerinden alınır. Yalnızca hisse
-                 sembolü (örn. THYAO.IS) bu servise gider; portföyünüz veya kişisel bilginiz
-                 gönderilmez. Kapalıyken hisse değerlerini elle girersiniz.</p></div>
-              <label class="switch"><input type="checkbox" id="sStock" ${st.stockPrices ? 'checked' : ''}><i></i></label></div>
+            <p class="muted" style="font-size:12.5px;margin:0">
+              Hisse / ETF fiyatları da her yenilemede otomatik çekilir. Yahoo Finance verisi tarayıcıdan
+              doğrudan alınamadığı için bir okuma vekili (<b>r.jina.ai</b>, olmazsa allorigins / corsproxy)
+              kullanılır; bu servise yalnızca <b>sembol</b> (örn. THYAO.IS) gider, portföyünüz gitmez.</p>
           </div>
           <p class="section-label" style="margin-top:18px">Kurlar (1 birim kaç TRY?)</p>
           <div class="form-grid">
@@ -2361,7 +2410,7 @@
             <li><span>Sunucuya gönderim</span><b>Yok</b></li>
             <li><span>Dış istekler</span><b>Kur, fiyat, banka listesi</b></li>
             <li><span>Çevrimdışı çalışma</span><b>Etkin (PWA)</b></li>
-            <li><span>Sürüm</span><b>2.5.0</b></li>
+            <li><span>Sürüm</span><b>2.6.0</b></li>
           </ul>
           <p class="hl" style="margin-top:14px">
             Hesap numarası, IBAN, şifre veya cüzdan anahtarı gibi bilgileri buraya girmeyin.
@@ -2382,10 +2431,6 @@
     on('#sCompact', 'change', e => { st.compactNumbers = e.target.checked; S.save(); navigate(); });
     on('#sSplash', 'change', e => { st.showSplash = e.target.checked; S.save(); });
     on('#sBackupRem', 'change', e => { st.backupReminder = e.target.checked; S.save(); });
-    on('#sStock', 'change', e => {
-      st.stockPrices = e.target.checked; S.save();
-      if (e.target.checked) toast('Hisse fiyatları açıldı. Sembolleri girip “Şimdi yenile” deyin.', 'ok');
-    });
     on('#nPrice', 'change', e => { st.notifications.priceAlerts = e.target.checked; S.save(); });
     on('#nThreshold', 'change', e => {
       const v = S.parseNum(e.target.value);
@@ -2659,7 +2704,6 @@
         (fiyatı çekilebilecek toplam ${ap.eligible}).
         ${ap.needsSymbol.length ? `<br><span class="warn-tag">${ap.needsSymbol.length} varlıkta ürün/sembol seçilmemiş:
           ${esc(ap.needsSymbol.map(x => x.name).join(', '))}</span>` : ''}
-        ${ap.stockOff.length ? `<br><span class="warn-tag">${ap.stockOff.length} hisse/ETF için fiyat çekimi kapalı.</span>` : ''}
         ${!ap.auto && ap.eligible ? `<br><span class="warn-tag">Hiçbir varlıkta “otomatik fiyat” açık değil —
           varlığı düzenleyip ürün/sembol seçin.</span>` : ''}</p>`;
     const bad = res.filter(r => !r.ok);
@@ -2692,9 +2736,6 @@
       if (ap.needsSymbol.length) {
         toast(`${ap.needsSymbol.length} varlıkta otomatik fiyat açık ama ürün/sembol seçilmemiş: ` +
           ap.needsSymbol.slice(0, 3).map(a => a.name).join(', '), 'err');
-      }
-      if (ap.stockOff.length) {
-        toast(`${ap.stockOff.length} hisse/ETF için fiyat çekimi Ayarlar'dan kapalı.`, 'err');
       }
       navigate();
       checkAlerts();

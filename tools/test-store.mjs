@@ -203,5 +203,36 @@ group('Ortalama maliyet yöntemi');
   check('kalan miktar 100', near(S.getAsset(a.id).quantity, 100));
 }
 
+group('Döviz nakit — maliyet raporlama para biriminde (costCurrency)');
+{
+  const S = loadStore();                                   // 1 USD = 40 TRY
+  // 1.000 USD, ortalama 30 TRY'den alınmış
+  const a = S.addAsset({ name: 'Dolar Birikim', type: 'cash', quantity: 1000, unit: 'birim',
+    unitPrice: 1, unitCost: 30, currency: 'USD', costCurrency: 'TRY',
+    location: { kind: 'bank', name: 'X Bankası' } });
+  check('costCurrency saklandı', S.getAsset(a.id).costCurrency === 'TRY');
+  check('değer 40.000 TRY', near(S.assetValue(a, 'TRY'), 40000), S.assetValue(a, 'TRY'));
+  check('maliyet 30.000 TRY', near(S.assetCost(a, 'TRY'), 30000), S.assetCost(a, 'TRY'));
+  const t = S.totals('TRY');
+  check('kur karı 10.000 TRY', near(t.pl, 10000), t.pl);
+
+  // Satışta maliyet esası hasılatla aynı birime (USD) çevrilir: 30.000 TRY = 750 USD
+  const sale = S.sellAsset(a.id, { quantity: '1000', unitPrice: '1', fee: '0',
+    costMethod: 'average', proceedsTo: { mode: 'none' } });
+  check('maliyet esası 750 USD', near(sale.costBasis, 750), sale.costBasis);
+  check('gerçekleşen K/Z 250 USD', near(sale.realized, 250), sale.realized);
+}
+
+group('TL nakit — maliyet tutarın kendisi, kâr/zarar yok');
+{
+  const S = loadStore();
+  const a = S.addAsset({ name: 'Vadesiz TL', type: 'cash', quantity: 50000, unit: 'birim',
+    unitPrice: 1, unitCost: 1, currency: 'TRY', location: { kind: 'bank', name: 'X Bankası' } });
+  check('costCurrency boş = varlığın para birimi', S.costCurrency(S.getAsset(a.id)) === 'TRY');
+  const t = S.totals('TRY');
+  check('değer = maliyet', near(t.value, 50000) && near(t.cost, 50000), t.cost);
+  check('K/Z sıfır', near(t.pl, 0), t.pl);
+}
+
 console.log(`\n${passed} test geçti, ${failed} başarısız.`);
 process.exit(failed ? 1 : 0);

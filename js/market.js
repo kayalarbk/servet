@@ -370,9 +370,7 @@ window.Market = (function () {
        önbellekte tutulur ve istekler 3'erli paralel gruplar halinde gider. */
     const stockAssets = assets.filter(a => a.type === 'stock' || a.type === 'etf');
     if (stockAssets.length) {
-      if (!Store.settings.stockPrices) {
-        failed.push('hisse (ayarlardan kapalı)');
-      } else {
+      {
         c.stocks = c.stocks || {};
         const wanted = new Map();          // anahtar -> ilk eşleşen varlık
         for (const a of stockAssets) {
@@ -505,7 +503,6 @@ window.Market = (function () {
         const d = await getJSON(SOURCES.crypto(id));
         if (d && d[id] && d[id].usd) { value = d[id].usd; from = 'USD'; }
       } else if (a.type === 'stock' || a.type === 'etf') {
-        if (!Store.settings.stockPrices) return { ok: false, reason: 'hisse fiyatı çekimi kapalı', needsStockToggle: true };
         let got = null;
         for (const sym of stockSymbols(a)) {
           try { got = await fetchStock(sym); break; } catch (e) { /* sıradaki biçim */ }

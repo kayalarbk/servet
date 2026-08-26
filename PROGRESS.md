@@ -2,7 +2,7 @@
 
 > Bu dosya **yeni bir oturumun kodu sıfırdan öğrenmesi** için yazıldı.
 > Kullanıcıya dönük anlatım `README.md`'dedir; burası geliştirici notudur.
-> Son güncelleme: 2026-08-27 · Sürüm **2.5.0**
+> Son güncelleme: 2026-08-27 · Sürüm **2.6.0**
 
 ---
 
@@ -67,7 +67,7 @@ Her modül `window.X = (function(){...})()` kalıbıyla global yayımlar (ES mod
     theme: 'navy-gold' | 'light-gold',
     locale: 'tr-TR',
     autoPrices: true,          // piyasa fiyatı çekimi — daima açık (ayar kaldırıldı, 2.4.0)
-    stockPrices: false,        // hisse çekimi (vekil kullandığı için opt-in)
+    stockPrices: true,         // hisse çekimi — daima açık (ayar kaldırıldı, 2.6.0)
     autoRates: true,           // kur çekimi — daima açık (ayar kaldırıldı, 2.4.0)
     assetTypes: [],            // kurulum testinde seçilen türler; boş = tümü
     showSplash: true,
@@ -93,7 +93,7 @@ Her modül `window.X = (function(){...})()` kalıbıyla global yayımlar (ES mod
 
 ### Asset
 ```js
-{ id, name, type, symbol, quantity, unit, unitPrice, unitCost, currency,
+{ id, name, type, symbol, quantity, unit, unitPrice, unitCost, costCurrency, currency,
   acquiredAt, maturityDate, interestRate, autoPrice,
   location: { kind, name, account },
   lots: [ { id, date, quantity, unitCost, note } ],
@@ -103,6 +103,10 @@ Her modül `window.X = (function(){...})()` kalıbıyla global yayımlar (ES mod
 - `symbol` çok işlevlidir: altın/gümüşte **kapalıçarşı ürün anahtarı** (`GRA`,
   `CEYREKALTIN`), kriptoda `BTC`, hissede `THYAO`/`AAPL`.
 - `unitCost` kalan lotların **ağırlıklı ortalaması** olarak senkron tutulur (`syncFromLots`).
+- `costCurrency` maliyetin tutulduğu para birimi (boş = `currency`). Döviz nakitte
+  "1 USD kaç TRY'ye alındı" bilgisini taşır; `assetCost` bu birimden çevirir, `sellAsset`
+  maliyet esasını hasılatın birimine (`costToAssetCur`) çevirir. Böylece 1.000 USD'lik
+  nakitte kur kârı görünür — eskiden maliyet daima 1.000 USD olduğu için K/Z hep 0'dı.
 - `location.kind` → `physical | bank | platform | custody | other`
 
 ### Snapshot (kritik ayrıntı)
@@ -152,14 +156,15 @@ geçmiştir; `rescaleSynthetic()` bunu güncel toplamla ölçekler (yoksa grafik
 | Döviz kuru | `open.er-api.com/v6/latest/TRY` | 6 sa | `rates[X] = 1 X kaç TRY` |
 | Kapalıçarşı | `finans.truncgil.com/v4/today.json` | 30 dk | gram/çeyrek/tam/ata/ayar altınları, gümüş, döviz |
 | Kripto | `api.coingecko.com/simple/price` | 30 dk | `COIN_IDS` haritası sembol→id |
-| Hisse/ETF | Yahoo chart ucu, vekil zinciriyle (`r.jina.ai` → allorigins → corsproxy) | 15 dk | **opt-in**; BIST'e `.IS` eklenir |
+| Hisse/ETF | Yahoo chart ucu, vekil zinciriyle (`r.jina.ai` → allorigins → corsproxy) | 15 dk | BIST'e `.IS` eklenir |
 | Banka listesi | `raw.githubusercontent.com/tgezginis/turkish_bin_numbers` | 7 gün | yerel listeyle birleştirilir |
 | TÜFE | `api.worldbank.org` (TR, FP.CPI.TOTL.ZG) | 30 gün | reel getiri için |
 
 **Neden vekil?** Yahoo CORS başlığı vermez; `r.jina.ai` okuma vekili `Origin`'i yansıtır.
 Anahtarsız kullanımda dakikada 20 istekle sınırlı olduğu için `PROXIES` dizisi sırayla denenir
-(ilk hata saklanır, kullanıcıya o gösterilir). Vekile **yalnızca sembol** gider. Bu yüzden `settings.stockPrices` varsayılan `false` ve
-kullanıcıdan açık onay istenir.
+(ilk hata saklanır, kullanıcıya o gösterilir). Vekile **yalnızca sembol** gider; bu yüzden 2.6.0'da opt-in kaldırıldı, hisse fiyatı da
+diğer kaynaklar gibi her yenilemede çekilir (`settings.stockPrices` yalnızca geriye dönük
+uyumluluk için duruyor ve `migrate()` ile daima `true`).
 
 **Önemli fonksiyonlar:**
 - `refreshAll(force)` → kur + fiyat + banka + TÜFE; `{rates, prices, banks, errors, failed}`
@@ -206,7 +211,11 @@ gizli listeden seçilip kaydedilen tür listeye eklenir. Ayarlar → Kurulum Tes
 
 **Varlık formu (`openAssetForm`) — alan görünürlüğü dinamiktir** (`syncTypeFields`):
 - Otomatik fiyat çekilecekse "Güncel birim değer" gizlenir.
-- Nakitte maliyet ve birim değer gizlenir (`unitPrice` daima 1).
+- Nakitte "ürün" satırı **para birimi seçimidir** (`cashFieldHTML`: TRY/USD/EUR/GBP/CHF çipleri +
+  "Diğer…" tüm listeyi açar); miktar alanı "Tutar" olur, birim etiketi para birimi kodudur.
+- Nakitte birim değer daima 1'dir, gizlenir. Maliyet yalnızca **raporlama para birimi dışındaki**
+  nakitte sorulur ("Alış kuru — 1 USD kaç TRY?") ve `costCurrency` = raporlama para birimi olarak
+  kaydedilir; raporlama para birimindeki nakitte maliyet tutarın kendisidir (`unitCost = 1`).
 - Vade/faiz yalnızca `deposit`/`bond` türlerinde.
 - Fiyatlanamayan türlerde "Sembol / kod" alanı **Detaylar** bölümüne taşınır (DOM'da yer değiştirir,
   değer korunur).
