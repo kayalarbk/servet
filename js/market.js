@@ -27,6 +27,8 @@ window.Market = (function () {
     crypto: ids => `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`,
     // Hisse/ETF: Yahoo Finance, CORS'a açık okuma vekili üzerinden (opsiyonel)
     stock: sym => PROXIES[0](yahooChart(sym)),
+    // Sembol arama: paketlenmiş liste yetmediğinde tüm borsalarda arar
+    search: q => PROXIES[0](yahooSearch(q)),
     // Yıllık TÜFE (Dünya Bankası, CORS açık)
     cpi: 'https://api.worldbank.org/v2/country/TR/indicator/FP.CPI.TOTL.ZG?format=json&per_page=5'
   };
@@ -37,6 +39,8 @@ window.Market = (function () {
      tutulur. Vekile yalnızca sembol gider, portföy verisi gitmez. */
   const yahooChart = sym => 'https://query1.finance.yahoo.com/v8/finance/chart/' +
     encodeURIComponent(sym) + '?interval=1d&range=1d';
+  const yahooSearch = q => 'https://query1.finance.yahoo.com/v1/finance/search?q=' +
+    encodeURIComponent(q) + '&quotesCount=25&newsCount=0&listsCount=0&enableFuzzyQuery=true';
   const PROXIES = [
     u => 'https://r.jina.ai/' + u,
     u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
@@ -236,24 +240,65 @@ window.Market = (function () {
     return a.currency === 'TRY' ? [s + '.IS', s] : [s, s + '.IS'];
   }
 
-  async function fetchStock(sym) {
-    const url = yahooChart(sym);
+  /* Vekil zincirini sırayla dener, ilk çalışanın JSON gövdesini döndürür. */
+  async function proxyJSON(url, ms) {
     let last = null;
     for (const proxy of PROXIES) {
       try {
-        const txt = await fetchText(proxy(url), 20000);
+        const txt = await fetchText(proxy(url), ms || 20000);
         // r.jina.ai yanıtı markdown başlıklarıyla sarar; ilk JSON gövdesini ayıkla.
         const i = txt.indexOf('{');
         if (i < 0) throw new Error('Beklenmeyen yanıt');
-        const d = JSON.parse(txt.slice(i));
-        if (d && d.chart && d.chart.error) throw new Error(d.chart.error.description || 'sembol bulunamadı');
-        const meta = d && d.chart && d.chart.result && d.chart.result[0] && d.chart.result[0].meta;
-        const price = meta && Number(meta.regularMarketPrice);
-        if (!(price > 0)) throw new Error('Fiyat bulunamadı');
-        return { price, currency: meta.currency || 'USD', name: meta.longName || meta.shortName || sym };
+        return JSON.parse(txt.slice(i));
       } catch (e) { if (!last) last = e; }   // ilk hatayı sakla, sıradaki vekili dene
     }
-    throw last || new Error('Fiyat alınamadı');
+    throw last || new Error('Yanıt alınamadı');
+  }
+
+  async function fetchStock(sym) {
+    const d = await proxyJSON(yahooChart(sym));
+    if (d && d.chart && d.chart.error) throw new Error(d.chart.error.description || 'sembol bulunamadı');
+    const meta = d && d.chart && d.chart.result && d.chart.result[0] && d.chart.result[0].meta;
+    const price = meta && Number(meta.regularMarketPrice);
+    if (!(price > 0)) throw new Error('Fiyat bulunamadı');
+    return { price, currency: meta.currency || 'USD', name: meta.longName || meta.shortName || sym };
+  }
+
+  /* ================= SEMBOL ARAMA =================
+     Paketlenmiş liste (symbols.js) yalnızca bir başlangıç listesidir; BIST'te
+     900'ü aşkın sembol var ve sürekli değişiyor. Bu arama Yahoo'nun tüm
+     borsaları kapsayan arama ucunu kullanır — servise yalnızca yazdığınız
+     arama metni gider. Dönen `value` doğrudan fiyat çekiminde kullanılabilecek
+     tam semboldür (ör. GMSTR.IS). */
+  const EX_CUR = { IST: 'TRY', LSE: 'GBP', FRA: 'EUR', GER: 'EUR', PAR: 'EUR', AMS: 'EUR', MIL: 'EUR' };
+  const TYPE_TR = { EQUITY: 'hisse', ETF: 'ETF', MUTUALFUND: 'fon', INDEX: 'endeks', CURRENCY: 'döviz',
+                    CRYPTOCURRENCY: 'kripto', FUTURE: 'vadeli' };
+
+  async function searchSymbols(q, wanted) {
+    const query = String(q || '').trim();
+    if (query.length < 2) return [];
+    const d = await proxyJSON(yahooSearch(query), 15000);
+    const quotes = (d && Array.isArray(d.quotes) ? d.quotes : []).filter(x => x && x.symbol);
+    const want = wanted === 'etf' ? ['ETF', 'MUTUALFUND', 'INDEX', 'EQUITY']
+               : wanted === 'stock' ? ['EQUITY', 'ETF', 'MUTUALFUND', 'INDEX']
+               : null;
+    // Sıralama: önce Borsa İstanbul, sonra ABD borsaları, en sonda Yahoo'nun
+    // "0P…" fon kimlikleri (kullanıcı için okunaksız).
+    const rank = x => (x.symbol || '').startsWith('0P') ? 3
+      : x.exchange === 'IST' ? 0
+      : ['NMS', 'NYQ', 'NGM', 'PCX', 'ASE'].includes(x.exchange) ? 1 : 2;
+    return quotes
+      .filter(x => !want || want.includes(x.quoteType))
+      .sort((a, b) => rank(a) - rank(b))
+      .map(x => ({
+        value: x.symbol,
+        code: x.symbol,
+        name: x.longname || x.shortname || x.symbol,
+        market: x.exchDisp || x.exchange || '',
+        exchange: x.exchange || '',
+        currency: EX_CUR[x.exchange] || (x.exchange === 'NYQ' || x.exchange === 'NMS' ? 'USD' : ''),
+        kind: TYPE_TR[x.quoteType] || (x.typeDisp || '').toLowerCase()
+      }));
   }
 
   async function fetchText(url, ms) {
@@ -559,7 +604,7 @@ window.Market = (function () {
   }
 
   return {
-    diagnose, sources, verifySymbol, verifyPortfolioSymbols, fetchOne, refreshInflation,
+    diagnose, sources, verifySymbol, verifyPortfolioSymbols, fetchOne, refreshInflation, searchSymbols,
     refreshBanks, banks, listFor,
     refreshRates, rates, setRate,
     refreshPrices, refreshAll, fetchTR, fetchStock, stockSymbols,

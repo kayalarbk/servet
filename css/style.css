@@ -384,6 +384,9 @@ select{appearance:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns=
 @keyframes toastOut{to{opacity:0;transform:translateX(24px)}}
 
 /* Charts */
+/* Yeterli günlük kayıt oluşana kadar grafik kartı tek satırlık şeride iner */
+.card-slim{padding:12px 14px}
+.card-slim .card-title{font-size:13.5px}
 .chart-box{width:100%;position:relative}
 .chart-box svg{width:100%;height:auto;stroke:none}
 .donut-wrap{display:grid;grid-template-columns:minmax(140px,180px) 1fr;gap:20px;align-items:center}

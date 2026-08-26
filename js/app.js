@@ -288,8 +288,7 @@
     root.innerHTML = `
       ${banners()}
       ${pageHead(`Merhaba${S.state.profile.name ? ', ' + esc(S.state.profile.name) : ''} 👋`,
-        `${t.count} varlık · ${places.length} farklı saklama yeri · ${cur} bazında`,
-        `<button class="btn btn-sm" data-act="snapshot">Bugünü kaydet</button>`)}
+        `${t.count} varlık · ${places.length} farklı saklama yeri · ${cur} bazında`)}
 
       <div class="grid g-kpi" style="margin-bottom:16px">
         <div class="card kpi">
@@ -314,6 +313,16 @@
         </div>
       </div>
 
+      ${ser.length < 2 ? `
+      <div class="card card-slim" style="margin-bottom:16px">
+        <div class="card-head" style="margin:0">
+          <h2 class="card-title">📈 Portföy Değeri — Son 90 Gün</h2>
+          <span class="pill"><span class="dot"></span>${ser.length} gün kayıt</span>
+        </div>
+        <p class="muted" style="font-size:12.5px;margin:6px 0 0">
+          Grafik, ikinci günlük kayıt oluştuğunda burada açılacak. Kayıt her değişiklikte
+          kendiliğinden alınır — bir şey yapmanız gerekmiyor.</p>
+      </div>` : `
       <div class="card" style="margin-bottom:16px">
         <div class="card-head">
           <h2 class="card-title">Portföy Değeri — Son 90 Gün</h2>
@@ -322,7 +331,7 @@
         <div class="chart-box">${Charts.area(
           ser.map(s => ({ label: shortDate(s.date), value: s.total })),
           { fmtY: v => S.fmtMoney(v, cur, { compact: true }), height: 250, aria: 'Portföy değeri zaman serisi' })}</div>
-      </div>
+      </div>`}
 
       <div class="grid g-2" style="margin-bottom:16px">
         <div class="card">
@@ -377,11 +386,6 @@
     requestAnimationFrame(() => $$('.bar-fill', root).forEach(b => { b.style.width = b.dataset.w; }));
 
     bannerActions(root);
-    root.addEventListener('click', e => {
-      if (e.target.closest('[data-act="snapshot"]')) {
-        S.takeSnapshot(true); toast('Bugünkü portföy değeri kaydedildi.', 'ok'); navigate();
-      }
-    });
   }
 
   const ytdPerf = () => S.performanceSince(new Date().getFullYear() + '-01-01');
@@ -679,6 +683,7 @@
     const items = [];
     opts.groups.forEach(g => g.items.forEach(it => items.push(Object.assign({ group: g.label }, it))));
     const norm = t => String(t || '').toLocaleLowerCase('tr').replace(/[İIıi]/g, 'i');
+    let remote = [], remoteMsg = '', remoteTimer = null, remoteSeq = 0;
 
     const back = openModal(`
       <div class="modal-head">
@@ -701,7 +706,10 @@
 
     function render() {
       const q = norm(search.value.trim());
-      shown = q ? items.filter(it => norm(it.code + ' ' + it.name + ' ' + (it.tag || '')).includes(q)) : items;
+      const local = q ? items.filter(it => norm(it.code + ' ' + it.name + ' ' + (it.tag || '')).includes(q)) : items;
+      // Çevrimiçi sonuçlar listenin altına eklenir; yereldekiler tekrarlanmaz.
+      const seen = new Set(local.map(it => norm(it.value)));
+      shown = local.concat(remote.filter(it => !seen.has(norm(it.value))));
 
       let html = '';
       let lastGroup = null;
@@ -726,13 +734,38 @@
         html += `<div class="picker-empty">Eşleşme yok. Farklı bir kelime deneyin.</div>`;
       }
       list.innerHTML = html;
-      count.textContent = `${shown.length} sonuç${opts.allowCustom ? ' · listede yoksa yazıp Enter’a basın' : ''}`;
+      count.textContent = `${shown.length} sonuç${remoteMsg ? ' · ' + remoteMsg : ''}` +
+        (opts.allowCustom ? ' · listede yoksa yazıp Enter’a basın' : '');
       hi = -1;
+    }
+
+    /* Paketlenmiş liste her borsayı kapsayamaz; opts.remote verilmişse yazdıkça
+       çevrimiçi arama yapılır (350 ms bekleyip son isteği uygular). */
+    function queryRemote() {
+      if (!opts.remote) return;
+      clearTimeout(remoteTimer);
+      const q = search.value.trim();
+      if (q.length < 2) { remote = []; remoteMsg = ''; return; }
+      remoteTimer = setTimeout(async () => {
+        const seq = ++remoteSeq;
+        remoteMsg = 'internette aranıyor…';
+        render();
+        try {
+          const res = await opts.remote(q);
+          if (seq !== remoteSeq) return;                 // daha yeni bir arama var
+          remote = res.map(x => Object.assign({ group: 'İnternet sonuçları (Yahoo Finance)' }, x));
+          remoteMsg = remote.length ? remote.length + ' çevrimiçi sonuç' : 'çevrimiçi sonuç yok';
+        } catch (e) {
+          if (seq !== remoteSeq) return;
+          remote = []; remoteMsg = 'çevrimiçi arama başarısız';
+        }
+        render();
+      }, 350);
     }
 
     function choose(item) { closeModal(); opts.onPick(item); }
 
-    search.addEventListener('input', render);
+    search.addEventListener('input', () => { render(); queryRemote(); });
     search.addEventListener('keydown', e => {
       const rows = $$('.picker-item', list);
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -853,8 +886,15 @@
       g.push({ label: 'ETF / Endeks fonları', items: SYMBOLS.ETF.map(toItem) });
     }
     openPicker({
-      title: '📈 Hisse / ETF seç', placeholder: 'Ara: THYAO, Apple, S&P 500…',
-      value: current, groups: g, allowCustom: true, onPick
+      title: '📈 Hisse / ETF seç', placeholder: 'Ara: THYAO, GMSTR, Apple, S&P 500…',
+      value: current, groups: g, allowCustom: true, onPick,
+      /* Paketlenmiş liste BIST'in tamamını kapsayamaz; iki harften sonra
+         Yahoo'nun arama ucundan tüm borsalarda arama yapılır. Servise yalnızca
+         yazdığınız metin gider. */
+      remote: async q => (await Market.searchSymbols(q, type)).map(x => ({
+        value: x.value, code: x.code, name: x.name, currency: x.currency,
+        tag: [x.market, x.kind].filter(Boolean).join(' · ')
+      }))
     });
   }
 
@@ -1133,6 +1173,10 @@
           $('#symbolWrap', back).innerHTML = symbolFieldHTML(type, item.value);
           const q = DATA.metalQuote(item.value);
           if (q) { $('#fUnit', back).value = q.unit; $('#fCur', back).value = 'TRY'; }
+          // Çevrimiçi sonuçta borsanın para birimi biliniyorsa forma taşı
+          else if (item.currency && $('#fCur', back).querySelector(`option[value="${item.currency}"]`)) {
+            $('#fCur', back).value = item.currency;
+          }
           if (item.value) $('#fAuto', back).checked = true;
           if (!$('#fName', back).value.trim() && item.name && !item.custom) $('#fName', back).value = item.name;
           syncTypeFields();
@@ -2207,9 +2251,9 @@
           <div class="switch-row"><div><strong style="font-size:13.5px">Haftalık özet</strong>
             <p>Haftada bir açılışta portföy özeti göster.</p></div>
             <label class="switch"><input type="checkbox" id="nWeek" ${st.notifications.weeklySummary ? 'checked' : ''}><i></i></label></div>
-          <div class="switch-row"><div><strong style="font-size:13.5px">Günlük anlık görüntü</strong>
-            <p>Grafiklerin beslendiği günlük portföy kaydını otomatik al.</p></div>
-            <label class="switch"><input type="checkbox" id="nSnap" ${st.snapshotDaily ? 'checked' : ''}><i></i></label></div>
+          <p class="muted" style="font-size:12.5px;margin:10px 0 0">
+            Grafikleri besleyen günlük portföy kaydı, her varlık ekleme/çıkarma/satış işleminde
+            ve her açılışta kendiliğinden alınır.</p>
         </div>
 
         <div class="card">
@@ -2317,7 +2361,7 @@
             <li><span>Sunucuya gönderim</span><b>Yok</b></li>
             <li><span>Dış istekler</span><b>Kur, fiyat, banka listesi</b></li>
             <li><span>Çevrimdışı çalışma</span><b>Etkin (PWA)</b></li>
-            <li><span>Sürüm</span><b>2.4.0</b></li>
+            <li><span>Sürüm</span><b>2.5.0</b></li>
           </ul>
           <p class="hl" style="margin-top:14px">
             Hesap numarası, IBAN, şifre veya cüzdan anahtarı gibi bilgileri buraya girmeyin.
@@ -2357,7 +2401,6 @@
     });
     on('#nBal', 'change', e => { st.notifications.rebalance = e.target.checked; S.save(); });
     on('#nWeek', 'change', e => { st.notifications.weeklySummary = e.target.checked; S.save(); });
-    on('#nSnap', 'change', e => { st.snapshotDaily = e.target.checked; S.save(); });
     on('#sRefresh', 'click', () => doRefresh(true));
 
     root.addEventListener('change', e => {
@@ -2780,7 +2823,7 @@
       if (routeOf() !== 'settings') navigate();
       return Market.refreshPrices(false);
     }).then(res => {
-      if (S.settings.snapshotDaily) S.takeSnapshot();
+      S.takeSnapshot();
       updateTopbar();
       // Fiyatlar değiştiyse açık ekranı yeniden çiz — aksi halde tabloda
       // eski fiyatlar görünmeye devam ediyordu.

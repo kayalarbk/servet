@@ -102,6 +102,7 @@ window.Store = (function () {
   function migrate(s) {
     s.settings.autoRates = true;
     s.settings.autoPrices = true;
+    s.settings.snapshotDaily = true;   // günlük kayıt artık her değişiklikte otomatik
     if (!Array.isArray(s.settings.assetTypes)) s.settings.assetTypes = [];
     s.settings.assetTypes = s.settings.assetTypes
       .filter(id => DATA.ASSET_TYPES.some(t => t.id === id));
@@ -1122,6 +1123,15 @@ window.Store = (function () {
     save();
   }
 
+  /* Portföyü değiştiren her işlemden sonra günlük kaydı tazeler. Kullanıcının
+     ayrıca "bugünü kaydet" demesine gerek yoktur; aynı güne ikinci kayıt
+     yazılmaz, mevcut kaydın üzerine geçilir. */
+  const stamped = fn => function () {
+    const r = fn.apply(null, arguments);
+    try { takeSnapshot(true); } catch (e) { console.warn('[Servet] Günlük kayıt alınamadı:', e); }
+    return r;
+  };
+
   /* ---------------- Genel API ---------------- */
   return {
     get state() { return state; },
@@ -1129,12 +1139,16 @@ window.Store = (function () {
     get assets() { return state.assets; },
     get transactions() { return state.transactions; },
     save, flush, reload, subscribe, uid, nowISO, todayISO, parseNum,
-    validateAsset, addAsset, updateAsset, removeAsset, getAsset,
-    validateSale, sellAsset, realizedTotals, deleteSale,
-    INCOME_KINDS, validateIncome, addIncome, deleteIncome, incomeTotals, totalReturn,
+    validateAsset, getAsset,
+    addAsset: stamped(addAsset), updateAsset: stamped(updateAsset), removeAsset: stamped(removeAsset),
+    validateSale, realizedTotals,
+    sellAsset: stamped(sellAsset), deleteSale: stamped(deleteSale),
+    INCOME_KINDS, validateIncome, incomeTotals, totalReturn,
+    addIncome: stamped(addIncome), deleteIncome: stamped(deleteIncome),
     get income() { return state.income; },
     maturities, realReturn, inflationRate,
-    ensureLots, avgCost, addLot, removeLot, validateLot, previewCost,
+    ensureLots, avgCost, validateLot, previewCost,
+    addLot: stamped(addLot), removeLot: stamped(removeLot),
     get sales() { return state.sales; },
     addManualTx, clearTransactions, deleteTx, updateTxNote,
     convert, assetValue, assetCost, totals, byType, byLocationKind, byLocationName, byCurrency,

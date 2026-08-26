@@ -2,7 +2,7 @@
 
 > Bu dosya **yeni bir oturumun kodu sıfırdan öğrenmesi** için yazıldı.
 > Kullanıcıya dönük anlatım `README.md`'dedir; burası geliştirici notudur.
-> Son güncelleme: 2026-08-27 · Sürüm **2.4.0**
+> Son güncelleme: 2026-08-27 · Sürüm **2.5.0**
 
 ---
 
@@ -27,7 +27,8 @@ internetten çeker, kâr/zarar ve dağılım analizleri üretir.
 index.html                Uygulama kabuğu, splash, kilit kapısı, script sırası
 css/style.css             Tüm stiller (tek dosya, ~1400 satır)
 js/lock.js                PIN kilidi + AES-GCM şifreleme      ← Store'dan ÖNCE yüklenir
-js/symbols.js             BIST/ABD hisse + ETF listeleri (statik veri)
+js/symbols.js             BIST/ABD hisse + ETF başlangıç listeleri (statik; asıl arama
+                          Market.searchSymbols ile çevrimiçi yapılır)
 js/data.js                Varlık türleri, saklama yerleri, para birimleri, maden ürünleri,
                           işlem türleri, banka/platform yedek listeleri, grafik paleti
 js/store.js               ⭐ Veri katmanı: durum, kalıcılık, doğrulama, tüm hesaplar
@@ -75,7 +76,7 @@ Her modül `window.X = (function(){...})()` kalıbıyla global yayımlar (ES mod
     notifications: { priceAlerts, priceThreshold, rebalance, weeklySummary },
     rebalanceTargets: { [assetTypeId]: yüzde },
     inflationRate: null,       // null → Dünya Bankası'ndan çekilir
-    snapshotDaily: true,
+    snapshotDaily: true,       // artık ayar değil; her değişiklikte kayıt alınır
     onboarded: false,
     lastBackupAt: 0, backupReminder: true
   },
@@ -128,6 +129,7 @@ geçmiştir; `rescaleSynthetic()` bunu güncel toplamla ölçekler (yoksa grafik
 | Getiri | `addIncome`, `deleteIncome`, `incomeTotals`, `totalReturn`, `INCOME_KINDS` |
 | Değerleme | `convert`, `assetValue`, `assetCost`, `totals`, `byType`, `byLocationKind`, `byCurrency` |
 | Seri | `takeSnapshot`, `series(days, cur)`, `seriesFrom`, `performance`, `performanceSince` |
+| — | Portföyü değiştiren dışa açık fonksiyonlar `stamped()` ile sarılıdır: her ekleme/çıkarma/satış sonrası `takeSnapshot(true)` çalışır (aynı güne tek kayıt). |
 | Analiz | `rebalancePlan`, `setTargets`, `maturities`, `realReturn`, `inflationRate` |
 | Durum | `missingRates`, `autoPriceStatus`, `backupStatus`, `markBackedUp`, `cashAssets` |
 | Biçim | `fmtMoney`, `fmtNum`, `fmtPct`, `fmtDate`, `fmtDateTime`, `relTime` |
@@ -162,6 +164,8 @@ kullanıcıdan açık onay istenir.
 **Önemli fonksiyonlar:**
 - `refreshAll(force)` → kur + fiyat + banka + TÜFE; `{rates, prices, banks, errors, failed}`
 - `fetchOne(asset)` → tek varlık için anında fiyat (varlık kaydedilir kaydedilmez çağrılır)
+- `searchSymbols(q, type)` → Yahoo arama ucu (vekil zinciriyle); tüm borsalarda sembol arar,
+  sonuçları BIST → ABD → diğer sırasıyla döndürür. Seçicideki "İnternet sonuçları" grubunu besler.
 - `diagnose()` → her kaynağı tek tek dener, süre + sonuç döndürür (Ayarlar'daki test düğmesi)
 - `note(key, ok, msg)` → `cache.sources`'a kaynak durumu yazar (Ayarlar'da ✓/✕ listesi)
 - `errMsg(e)` → tarayıcı hatasını Türkçeleştirir (zaman aşımı, 429, çevrimdışı, bağlantı yok).
@@ -185,8 +189,10 @@ Durum tutan sayfa yok; filtreler modül seviyesi nesnelerde (`assetFilter`, `his
 **Ortak bileşenler:**
 - `openModal(html, opts)` / `closeModal()` — **yığılabilir** (seçici, form üstünde açılır),
   odak tuzağı içerir, kapanışta `modal:closed` olayı yayar.
-- `openPicker({title, groups, value, allowCustom, onPick})` — üstte arama, gruplanmış liste,
+- `openPicker({title, groups, value, allowCustom, onPick, remote})` — üstte arama, gruplanmış liste,
   ok tuşları + Enter. "Kendim yazayım" satırı **en sonda** durur (gerçek eşleşmeler öne geçsin).
+  `remote(q)` verilirse iki harften sonra 350 ms gecikmeyle çevrimiçi arama yapılır; sonuçlar
+  yerel listenin altına eklenir, yarış koşulu `remoteSeq` ile engellenir.
 - `openRowMenu(assetId, btn)` — satır ⋯ menüsü. **`document.body`'ye eklenir**, `position:fixed`,
   ekran içine sıkıştırılır. (Tablo `overflow:auto` ve kart `transform` kırpıyordu.)
 - `toast(msg, kind, action)` — `action` verilirse düğmeli/kalıcı toast (SW güncellemesi).
@@ -305,7 +311,8 @@ python -m http.server 8777 --bind 127.0.0.1
 ## 13. Bilinen sınırlar / yapılmayanlar
 
 - **Çok cihaz senkronu yok** — yalnızca QR veya JSON yedek.
-- **BIST listesi elle yazılmıştır** (`js/symbols.js`, ~90 şirket); zamanla eskir.
+- **Paketlenmiş BIST listesi kısadır** (`js/symbols.js`, ~90 şirket) ve çevrimdışı başlangıç
+  listesidir; listede olmayan her sembol (ör. `GMSTR.IS`) seçicideki çevrimiçi aramayla bulunur.
   `Market.verifyPortfolioSymbols()` portföydeki sembolleri doğrular ama listeyi güncellemez.
 - **Vergi/stopaj hesabı yok**; FIFO yalnızca kâr/zarar bilgisi içindir.
 - **Platin/paladyum otomatik fiyatı yok** (kaynaktaki birim belirsiz olduğu için bilinçli olarak kapalı).

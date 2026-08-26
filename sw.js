@@ -3,24 +3,24 @@
    Uygulama kabuğu: cache-first (sürümlü)
    Dış API'ler   : network-first, başarısızsa son yanıt (stale) döner
    ===================================================================== */
-const VERSION = 'servet-v2.4.0';
+const VERSION = 'servet-v2.5.0';
 const SHELL = VERSION + '-shell';
 const RUNTIME = VERSION + '-runtime';
 
 const SHELL_FILES = [
   './',
   './index.html',
-  './css/style.css?v=2.4.0',
-  './js/lock.js?v=2.4.0',
-  './js/symbols.js?v=2.4.0',
-  './js/data.js?v=2.4.0',
-  './js/store.js?v=2.4.0',
-  './js/charts.js?v=2.4.0',
-  './js/market.js?v=2.4.0',
-  './js/qr.js?v=2.4.0',
-  './js/transfer.js?v=2.4.0',
-  './js/onboard.js?v=2.4.0',
-  './js/app.js?v=2.4.0',
+  './css/style.css?v=2.5.0',
+  './js/lock.js?v=2.5.0',
+  './js/symbols.js?v=2.5.0',
+  './js/data.js?v=2.5.0',
+  './js/store.js?v=2.5.0',
+  './js/charts.js?v=2.5.0',
+  './js/market.js?v=2.5.0',
+  './js/qr.js?v=2.5.0',
+  './js/transfer.js?v=2.5.0',
+  './js/onboard.js?v=2.5.0',
+  './js/app.js?v=2.5.0',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-192.png',
