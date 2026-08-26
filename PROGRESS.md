@@ -2,7 +2,7 @@
 
 > Bu dosya **yeni bir oturumun kodu sıfırdan öğrenmesi** için yazıldı.
 > Kullanıcıya dönük anlatım `README.md`'dedir; burası geliştirici notudur.
-> Son güncelleme: 2026-08-27 · Sürüm **2.3.3**
+> Son güncelleme: 2026-08-27 · Sürüm **2.4.0**
 
 ---
 
@@ -65,9 +65,10 @@ Her modül `window.X = (function(){...})()` kalıbıyla global yayımlar (ES mod
     baseCurrency: 'TRY',       // raporlama para birimi
     theme: 'navy-gold' | 'light-gold',
     locale: 'tr-TR',
-    autoPrices: true,          // piyasa fiyatı çekimi
+    autoPrices: true,          // piyasa fiyatı çekimi — daima açık (ayar kaldırıldı, 2.4.0)
     stockPrices: false,        // hisse çekimi (vekil kullandığı için opt-in)
-    autoRates: true,
+    autoRates: true,           // kur çekimi — daima açık (ayar kaldırıldı, 2.4.0)
+    assetTypes: [],            // kurulum testinde seçilen türler; boş = tümü
     showSplash: true,
     compactNumbers: false,
     costMethod: 'fifo' | 'average',
@@ -149,12 +150,13 @@ geçmiştir; `rescaleSynthetic()` bunu güncel toplamla ölçekler (yoksa grafik
 | Döviz kuru | `open.er-api.com/v6/latest/TRY` | 6 sa | `rates[X] = 1 X kaç TRY` |
 | Kapalıçarşı | `finans.truncgil.com/v4/today.json` | 30 dk | gram/çeyrek/tam/ata/ayar altınları, gümüş, döviz |
 | Kripto | `api.coingecko.com/simple/price` | 30 dk | `COIN_IDS` haritası sembol→id |
-| Hisse/ETF | `r.jina.ai/https://query1.finance.yahoo.com/...` | 15 dk | **opt-in**; BIST'e `.IS` eklenir |
+| Hisse/ETF | Yahoo chart ucu, vekil zinciriyle (`r.jina.ai` → allorigins → corsproxy) | 15 dk | **opt-in**; BIST'e `.IS` eklenir |
 | Banka listesi | `raw.githubusercontent.com/tgezginis/turkish_bin_numbers` | 7 gün | yerel listeyle birleştirilir |
 | TÜFE | `api.worldbank.org` (TR, FP.CPI.TOTL.ZG) | 30 gün | reel getiri için |
 
 **Neden vekil?** Yahoo CORS başlığı vermez; `r.jina.ai` okuma vekili `Origin`'i yansıtır.
-Vekile **yalnızca sembol** gider. Bu yüzden `settings.stockPrices` varsayılan `false` ve
+Anahtarsız kullanımda dakikada 20 istekle sınırlı olduğu için `PROXIES` dizisi sırayla denenir
+(ilk hata saklanır, kullanıcıya o gösterilir). Vekile **yalnızca sembol** gider. Bu yüzden `settings.stockPrices` varsayılan `false` ve
 kullanıcıdan açık onay istenir.
 
 **Önemli fonksiyonlar:**
@@ -162,6 +164,12 @@ kullanıcıdan açık onay istenir.
 - `fetchOne(asset)` → tek varlık için anında fiyat (varlık kaydedilir kaydedilmez çağrılır)
 - `diagnose()` → her kaynağı tek tek dener, süre + sonuç döndürür (Ayarlar'daki test düğmesi)
 - `note(key, ok, msg)` → `cache.sources`'a kaynak durumu yazar (Ayarlar'da ✓/✕ listesi)
+- `errMsg(e)` → tarayıcı hatasını Türkçeleştirir (zaman aşımı, 429, çevrimdışı, bağlantı yok).
+  Kullanıcıya gösterilen her hata metni bundan geçer.
+- `refreshRates`/`refreshBanks` hatayı yutup yedeğe düştüğü için durumlarını `ratesOk`/`banksOk`
+  bayraklarıyla `refreshAll`'a bildirir — aksi halde "her şey yolunda" görünüyordu.
+- `fetchTR(force)` — `force` zinciri kırılmasın diye; eskiden "Şimdi yenile" 30 dk boyunca
+  kapalıçarşıyı tazelemiyordu.
 
 **Fiyat uygulama sırası** (`refreshPrices`): kripto → maden (kapalıçarşı, yoksa ons/gram) →
 hisse (tekilleştirilmiş, 3'erli paralel, önbellekli) → varlıklara yaz → `pricesAt` güncelle.
@@ -184,6 +192,11 @@ Durum tutan sayfa yok; filtreler modül seviyesi nesnelerde (`assetFilter`, `his
 - `toast(msg, kind, action)` — `action` verilirse düğmeli/kalıcı toast (SW güncellemesi).
 - `banners()` — ana sayfa uyarı bantları: eksik kur, vade, sıfır fiyat, yedek hatırlatması.
 - `confirmDialog(title, htmlMessage, okLabel)` → Promise\<boolean\>
+
+**Varlık türü listesi**: `formTypes()` yalnızca `settings.assetTypes` (kurulum testinde
+seçilenler) döndürür; kalanlar "+N tür daha" düğmesiyle açılır. Düzenlenen varlığın türü ve
+gizli listeden seçilip kaydedilen tür listeye eklenir. Ayarlar → Kurulum Testi'ndeki
+"Tüm türleri göster" listeyi boşaltır (= tümü).
 
 **Varlık formu (`openAssetForm`) — alan görünürlüğü dinamiktir** (`syncTypeFields`):
 - Otomatik fiyat çekilecekse "Güncel birim değer" gizlenir.

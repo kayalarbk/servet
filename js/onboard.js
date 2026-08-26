@@ -318,6 +318,9 @@ window.Onboard = (function () {
 
   function finish(skipped, n) {
     Store.settings.onboarded = true;
+    // Seçilen türler yeni varlık formunda gösterilecek listeyi belirler.
+    // Hiç seçim yapılmadıysa (test atlandıysa) liste boş kalır = tüm türler.
+    if (picked.length) Store.settings.assetTypes = picked.slice();
     Store.save();
     Store.takeSnapshot(true);
     ui.closeModal();

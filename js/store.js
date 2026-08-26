@@ -47,9 +47,10 @@ window.Store = (function () {
         baseCurrency: 'TRY',
         theme: 'navy-gold',
         locale: 'tr-TR',
-        autoPrices: true,          // piyasa fiyatlarını otomatik çek
+        autoPrices: true,          // piyasa fiyatı çekimi — daima açık (ayar kaldırıldı)
         stockPrices: false,        // hisse/ETF fiyatı (dış vekil kullanır, opsiyonel)
-        autoRates: true,           // döviz kurlarını otomatik çek
+        autoRates: true,           // döviz kuru çekimi — daima açık (ayar kaldırıldı)
+        assetTypes: [],            // kurulum testinde seçilen türler; boş = tümü
         showSplash: true,          // giriş animasyonu
         compactNumbers: false,
         notifications: { priceAlerts: true, priceThreshold: 5, rebalance: false, weeklySummary: true },
@@ -85,7 +86,7 @@ window.Store = (function () {
       const raw = localStorage.getItem(KEY);
       if (!raw) return defaults();
       const parsed = JSON.parse(raw);
-      return deepMerge(defaults(), parsed);
+      return migrate(deepMerge(defaults(), parsed));
     } catch (e) {
       // Veriyi asla sessizce kaybetme: bozuk kaydı yedekleyip kullanıcıyı uyar.
       console.error('[Servet] Kayıtlı veri okunamadı, yedeklendi.', e);
@@ -93,6 +94,18 @@ window.Store = (function () {
       setTimeout(() => emitError('Kayıtlı veri okunamadı. Bozuk kopya "servet.v1.bozuk" anahtarında saklandı.'), 500);
       return defaults();
     }
+  }
+
+  /* Sürüm geçişleri: eski kayıtları güncel kurallara uydurur.
+     Kur ve piyasa fiyatı çekimi artık kapatılamaz (Ayarlar'daki anahtarlar
+     kaldırıldı); eskiden kapatmış kullanıcılarda veri sessizce eskimesin. */
+  function migrate(s) {
+    s.settings.autoRates = true;
+    s.settings.autoPrices = true;
+    if (!Array.isArray(s.settings.assetTypes)) s.settings.assetTypes = [];
+    s.settings.assetTypes = s.settings.assetTypes
+      .filter(id => DATA.ASSET_TYPES.some(t => t.id === id));
+    return s;
   }
 
   function deepMerge(base, over) {

@@ -26,11 +26,22 @@ window.Market = (function () {
     metal: sym => `https://api.gold-api.com/price/${sym}`,
     crypto: ids => `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`,
     // Hisse/ETF: Yahoo Finance, CORS'a açık okuma vekili üzerinden (opsiyonel)
-    stock: sym => 'https://r.jina.ai/https://query1.finance.yahoo.com/v8/finance/chart/' +
-                  encodeURIComponent(sym) + '?interval=1d&range=1d',
+    stock: sym => PROXIES[0](yahooChart(sym)),
     // Yıllık TÜFE (Dünya Bankası, CORS açık)
     cpi: 'https://api.worldbank.org/v2/country/TR/indicator/FP.CPI.TOTL.ZG?format=json&per_page=5'
   };
+
+  /* Yahoo CORS başlığı vermez; okuma vekili şart. Tek vekile bağlı kalmak
+     kırılgandı (r.jina.ai anahtarsız kullanımda dakikada 20 istekle sınırlı ve
+     zaman zaman 451/429 döner), bu yüzden sırayla denenen bir vekil listesi
+     tutulur. Vekile yalnızca sembol gider, portföy verisi gitmez. */
+  const yahooChart = sym => 'https://query1.finance.yahoo.com/v8/finance/chart/' +
+    encodeURIComponent(sym) + '?interval=1d&range=1d';
+  const PROXIES = [
+    u => 'https://r.jina.ai/' + u,
+    u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u),
+    u => 'https://corsproxy.io/?url=' + encodeURIComponent(u)
+  ];
 
   const COIN_IDS = {
     BTC: 'bitcoin', ETH: 'ethereum', USDT: 'tether', USDC: 'usd-coin', BNB: 'binancecoin',
@@ -48,6 +59,22 @@ window.Market = (function () {
     Store.save(true);
   }
   const sources = () => Store.state.cache.sources || {};
+
+  /* --------- Yardımcı: hata mesajını Türkçeleştir ---------
+     `fetch` başarısız olunca tarayıcı İngilizce ve belirsiz mesajlar verir
+     ("Failed to fetch", "The user aborted a request."). Bu mesajlar Ayarlar →
+     Veri kaynakları listesinde kullanıcıya olduğu gibi gösteriliyordu. */
+  function errMsg(e) {
+    const m = String((e && e.message) || e || '');
+    if (e && e.name === 'AbortError') return 'zaman aşımı';
+    if (!navigator.onLine) return 'çevrimdışısınız';
+    if (/^HTTP 429/.test(m)) return 'istek sınırı aşıldı (429) — birazdan tekrar deneyin';
+    if (/^HTTP 5\d\d/.test(m)) return 'kaynak sunucu hata verdi (' + m.slice(5) + ')';
+    if (/^HTTP 4\d\d/.test(m)) return 'kaynak isteği reddetti (' + m.slice(5) + ')';
+    if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return 'bağlantı kurulamadı';
+    if (/JSON|Unexpected token/i.test(m)) return 'yanıt okunamadı (beklenmeyen biçim)';
+    return m || 'bilinmeyen hata';
+  }
 
   /* --------- Yardımcı: zaman aşımlı fetch --------- */
   async function getJSON(url, ms) {
@@ -73,9 +100,11 @@ window.Market = (function () {
   };
 
   /* ================= BANKALAR ================= */
+  let banksOk = true;          // son denemede çevrimiçi liste alınabildi mi
   async function refreshBanks(force) {
     const c = Store.state.cache;
     if (!force && c.banks && Date.now() - c.banksAt < TTL_BANKS) return c.banks;
+    banksOk = true;
     try {
       const data = await getJSON(SOURCES.banks, 15000);
       const online = Array.isArray(data) ? data.map(r => r && r.bank_name).filter(Boolean) : [];
@@ -87,8 +116,9 @@ window.Market = (function () {
       Store.save(true);
       return c.banks;
     } catch (e) {
-      note('banks', false, e.message);
+      note('banks', false, errMsg(e));
       console.warn('[Servet] Banka listesi çevrimiçi alınamadı:', e.message);
+      banksOk = false;
       if (!c.banks) { c.banks = dedupe(DATA.BANKS_FALLBACK); c.banksSource = 'yerel yedek liste'; Store.save(true); }
       return c.banks;
     }
@@ -107,10 +137,11 @@ window.Market = (function () {
 
   /* ================= DÖVİZ KURLARI ================= */
   /* Sonuç: rates[X] = 1 X kaç TRY eder */
+  let ratesOk = true;          // son denemede kur alınabildi mi
   async function refreshRates(force) {
     const c = Store.state.cache;
+    ratesOk = true;
     if (!force && c.rates && Date.now() - c.ratesAt < TTL_RATES) return c.rates;
-    if (!Store.settings.autoRates && c.rates) return c.rates;
 
     const out = Object.assign({ TRY: 1 }, c.rates || {});
     let ok = false;
@@ -127,11 +158,11 @@ window.Market = (function () {
         note('rates', true, Object.keys(out).length + ' kur');
       }
     } catch (e) {
-      note('rates', false, e.message);
+      note('rates', false, errMsg(e));
       console.warn('[Servet] Kurlar alınamadı:', e.message);
     }
     // Kapalıçarşı: gram altın (GAU) ve er-api'nin veremediği kurlar için yedek
-    const tr = await fetchTR();
+    const tr = await fetchTR(force);
     if (tr) {
       if (tr.GRA) { out.GAU = tr.GRA.try; ok = true; }
       for (const cur of DATA.CURRENCIES) {
@@ -148,6 +179,7 @@ window.Market = (function () {
       } catch (e) { /* sessiz geç */ }
     }
 
+    ratesOk = ok;
     if (ok) { c.rates = out; c.ratesAt = Date.now(); Store.save(true); }
     else if (!c.rates) { c.rates = { TRY: 1 }; c.ratesSource = 'kur verisi yok — elle girin'; Store.save(true); }
     return c.rates;
@@ -166,9 +198,9 @@ window.Market = (function () {
 
   /* ================= KAPALIÇARŞI (TRY) ================= */
   /* Gram/çeyrek/tam altın, gümüş ve döviz — tek istekte, TRY cinsinden. */
-  async function fetchTR() {
+  async function fetchTR(force) {
     const c = Store.state.cache;
-    if (c.tr && Date.now() - c.trAt < TTL_PRICES) return c.tr;
+    if (!force && c.tr && Date.now() - c.trAt < TTL_PRICES) return c.tr;
     try {
       const d = await getJSON(SOURCES.tr, 12000);
       const out = {};
@@ -187,7 +219,7 @@ window.Market = (function () {
       Store.save(true);
       return out;
     } catch (e) {
-      note('tr', false, e.message);
+      note('tr', false, errMsg(e));
       console.warn('[Servet] Kapalıçarşı verisi alınamadı:', e.message);
       return c.tr || null;
     }
@@ -205,14 +237,23 @@ window.Market = (function () {
   }
 
   async function fetchStock(sym) {
-    const txt = await fetchText(SOURCES.stock(sym), 20000);
-    const i = txt.indexOf('{');
-    if (i < 0) throw new Error('Beklenmeyen yanıt');
-    const d = JSON.parse(txt.slice(i));
-    const meta = d && d.chart && d.chart.result && d.chart.result[0] && d.chart.result[0].meta;
-    const price = meta && Number(meta.regularMarketPrice);
-    if (!(price > 0)) throw new Error('Fiyat bulunamadı');
-    return { price, currency: meta.currency || 'USD', name: meta.longName || meta.shortName || sym };
+    const url = yahooChart(sym);
+    let last = null;
+    for (const proxy of PROXIES) {
+      try {
+        const txt = await fetchText(proxy(url), 20000);
+        // r.jina.ai yanıtı markdown başlıklarıyla sarar; ilk JSON gövdesini ayıkla.
+        const i = txt.indexOf('{');
+        if (i < 0) throw new Error('Beklenmeyen yanıt');
+        const d = JSON.parse(txt.slice(i));
+        if (d && d.chart && d.chart.error) throw new Error(d.chart.error.description || 'sembol bulunamadı');
+        const meta = d && d.chart && d.chart.result && d.chart.result[0] && d.chart.result[0].meta;
+        const price = meta && Number(meta.regularMarketPrice);
+        if (!(price > 0)) throw new Error('Fiyat bulunamadı');
+        return { price, currency: meta.currency || 'USD', name: meta.longName || meta.shortName || sym };
+      } catch (e) { if (!last) last = e; }   // ilk hatayı sakla, sıradaki vekili dene
+    }
+    throw last || new Error('Fiyat alınamadı');
   }
 
   async function fetchText(url, ms) {
@@ -250,8 +291,8 @@ window.Market = (function () {
         }
         note('crypto', true, symbols.length + ' sembol');
       } catch (e) {
-        failed.push('kripto (' + e.message + ')');
-        note('crypto', false, e.message);
+        failed.push('kripto (' + errMsg(e) + ')');
+        note('crypto', false, errMsg(e));
         console.warn('[Servet] Kripto fiyatları alınamadı:', e.message);
       }
     }
@@ -260,8 +301,12 @@ window.Market = (function () {
     /* --- Altın / gümüş: önce kapalıçarşı (TRY), yoksa ons fiyatı (USD) --- */
     const metalAssets = assets.filter(a => a.type === 'gold' || a.type === 'silver');
     if (metalAssets.length) {
-      const tr = await fetchTR();
-      if (tr) for (const q of DATA.METAL_QUOTES) if (tr[q.key]) prices['metal:' + q.key] = tr[q.key];
+      const tr = await fetchTR(force);
+      if (tr) {
+        for (const q of DATA.METAL_QUOTES) if (tr[q.key]) prices['metal:' + q.key] = tr[q.key];
+      } else {
+        failed.push('altın/gümüş (kapalıçarşı: ' + ((sources().tr && sources().tr.msg) || 'alınamadı') + ')');
+      }
       // Sembolsüz gram varlıklar için yedek: ons → gram, USD
       const needFallback = metalAssets.some(a => !DATA.metalQuote(a.symbol));
       if (needFallback) {
@@ -270,7 +315,7 @@ window.Market = (function () {
           try {
             const d = await getJSON(SOURCES.metal(sym), 10000);
             if (d && d.price > 0) prices['ons:' + type] = { usd: d.price / OZ_TO_GRAM };
-          } catch (e) { failed.push(sym); }
+          } catch (e) { failed.push((sym === 'XAU' ? 'ons altın' : 'ons gümüş') + ' (' + errMsg(e) + ')'); }
         }
       }
     }
@@ -292,6 +337,7 @@ window.Market = (function () {
         }
         const fresh = k => c.stocks[k] && Date.now() - c.stocks[k].at < TTL_STOCKS;
         const todo = [...wanted.entries()].filter(([k]) => !fresh(k));
+        let stockOk = 0, stockErr = '';
 
         for (let i = 0; i < todo.length; i += STOCK_CONCURRENCY) {
           const batch = todo.slice(i, i + STOCK_CONCURRENCY);
@@ -300,14 +346,19 @@ window.Market = (function () {
               try {
                 const got = await fetchStock(sym);
                 c.stocks[key] = { price: got.price, currency: got.currency, symbol: sym, at: Date.now() };
+                stockOk++;
                 return;
-              } catch (e) { /* sonraki sembol biçimini dene */ }
+              } catch (e) { stockErr = errMsg(e); /* sonraki sembol biçimini dene */ }
             }
-            failed.push((a.symbol || a.name) + ' (hisse)');
-            note('stocks', false, (a.symbol || a.name) + ' alınamadı');
+            failed.push((a.symbol || a.name) + ' (hisse' + (stockErr ? ': ' + stockErr : '') + ')');
           }));
         }
-        if (todo.length && Object.keys(c.stocks).length) note('stocks', true, Object.keys(c.stocks).length + ' sembol önbellekte');
+        // Durum notu bir kez yazılır; tek başarı, aynı turdaki hataları gizlemesin.
+        if (todo.length) {
+          if (stockOk === todo.length) note('stocks', true, stockOk + ' sembol güncellendi');
+          else if (stockOk) note('stocks', false, stockOk + '/' + todo.length + ' sembol alındı · ' + stockErr);
+          else note('stocks', false, stockErr || 'sembol alınamadı');
+        }
         for (const [key, a] of wanted) {
           const hit = c.stocks[key];
           if (hit) prices['stock:' + key] = hit;
@@ -378,7 +429,7 @@ window.Market = (function () {
       Store.save(true);
       return c.cpi;
     } catch (e) {
-      note('cpi', false, e.message);
+      note('cpi', false, errMsg(e));
       return c.cpi || null;
     }
   }
@@ -418,7 +469,7 @@ window.Market = (function () {
         value = got.price; from = got.currency;
         const c = Store.state.cache;
         c.stocks = c.stocks || {};
-        c.stocks[(a.symbol || '').toUpperCase() + '|' + a.currency] =
+        c.stocks[(a.symbol || '').trim().toUpperCase() + '|' + a.currency] =
           { price: got.price, currency: got.currency, at: Date.now() };
       }
 
@@ -431,20 +482,23 @@ window.Market = (function () {
       Store.save();
       return { ok: true, price: a.unitPrice, currency: a.currency };
     } catch (e) {
-      return { ok: false, reason: e.name === 'AbortError' ? 'zaman aşımı' : e.message };
+      return { ok: false, reason: errMsg(e) };
     }
   }
 
   /* ================= TOPLU YENİLEME ================= */
   async function refreshAll(force) {
     const results = { rates: false, prices: 0, banks: false, errors: [] };
-    try { await refreshRates(force); results.rates = true; } catch (e) { results.errors.push('kur'); }
+    try { await refreshRates(force); results.rates = ratesOk; } catch (e) { results.rates = false; }
+    if (!results.rates) results.errors.push('döviz kuru');
     try {
       const r = await refreshPrices(force);
       results.prices = r.updated || 0;
       results.failed = r.failed || [];
     } catch (e) { results.errors.push('fiyat'); }
-    try { await refreshBanks(false); results.banks = true; } catch (e) { results.errors.push('banka'); }
+    // refreshBanks kendi hatasını yutup yerel yedeğe düşer; durumu bayraktan oku.
+    try { await refreshBanks(false); results.banks = banksOk; } catch (e) { results.banks = false; }
+    if (!results.banks) results.errors.push('banka listesi');
     try { await refreshInflation(false); } catch (e) { /* enflasyon kritik değil */ }
     Store.takeSnapshot();
     return results;
@@ -498,8 +552,7 @@ window.Market = (function () {
         const detail = await run();
         out.push({ name, host, ok: true, ms: Math.round(performance.now() - t0), detail });
       } catch (e) {
-        out.push({ name, host, ok: false, ms: Math.round(performance.now() - t0),
-                   detail: e.name === 'AbortError' ? 'zaman aşımı' : e.message });
+        out.push({ name, host, ok: false, ms: Math.round(performance.now() - t0), detail: errMsg(e) });
       }
     }
     return out;

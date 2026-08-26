@@ -875,11 +875,34 @@
     });
   }
 
+  /* Formda gösterilecek varlık türleri: kurulum testinde seçilenler.
+     Seçim yoksa (test atlandıysa) tüm türler gösterilir. Düzenlenen varlığın
+     türü listede olmasa bile daima görünür — yoksa tür kaybolurdu. */
+  function formTypes(current) {
+    const picked = S.settings.assetTypes || [];
+    if (!picked.length) return DATA.ASSET_TYPES.slice();
+    const keep = new Set(picked);
+    if (current) keep.add(current);
+    return DATA.ASSET_TYPES.filter(t => keep.has(t.id));
+  }
+
+  function typeChipsHTML(current, all) {
+    const list = all ? DATA.ASSET_TYPES : formTypes(current);
+    const hidden = DATA.ASSET_TYPES.length - list.length;
+    return list.map(t => `<button type="button" class="chip ${current === t.id ? 'active' : ''}"
+        data-type="${t.id}">${t.icon} ${esc(t.name)}</button>`).join('') +
+      (hidden > 0 ? `<button type="button" class="chip chip-more" data-more="1"
+        title="Kurulum testinde seçmediğiniz türler">+${hidden} tür daha</button>` : '');
+  }
+
   /* ================= Varlık formu ================= */
   function openAssetForm(asset) {
     const isEdit = !!asset;
+    // Yeni varlıkta varsayılan tür, gösterilen listenin ilkidir; aksi halde
+    // seçili tür gizli kalabilirdi (ör. kurulum testinde altın seçilmemişse).
+    const firstType = formTypes()[0] || DATA.ASSET_TYPES[0];
     const a = asset || {
-      name: '', type: 'gold', symbol: '', quantity: '', unit: 'gram', unitPrice: '', unitCost: '',
+      name: '', type: firstType.id, symbol: '', quantity: '', unit: firstType.unit, unitPrice: '', unitCost: '',
       currency: S.settings.baseCurrency, acquiredAt: S.todayISO(), autoPrice: false, notes: '',
       location: { kind: 'physical', name: '', account: '' }
     };
@@ -892,10 +915,7 @@
       <form class="modal-body" id="assetForm" novalidate>
         <div class="panel">
           <p class="section-label">Varlık Türü</p>
-          <div class="chip-row" id="typeChips">
-            ${DATA.ASSET_TYPES.map(t => `<button type="button" class="chip ${a.type === t.id ? 'active' : ''}"
-              data-type="${t.id}">${t.icon} ${esc(t.name)}</button>`).join('')}
-          </div>
+          <div class="chip-row" id="typeChips">${typeChipsHTML(a.type, false)}</div>
         </div>
 
         <div class="panel">
@@ -1065,6 +1085,10 @@
     refreshLocList();
 
     $('#typeChips', back).addEventListener('click', e => {
+      if (e.target.closest('[data-more]')) {
+        $('#typeChips', back).innerHTML = typeChipsHTML(type, true);
+        return;
+      }
       const c = e.target.closest('[data-type]'); if (!c) return;
       type = c.dataset.type;
       $$('#typeChips .chip', back).forEach(x => x.classList.toggle('active', x === c));
@@ -1160,6 +1184,10 @@
         if (first) first.focus();
         return;
       }
+
+      // Gizli listeden bir tür seçildiyse artık kullanıcının türlerinden sayılır.
+      const picked = S.settings.assetTypes || [];
+      if (picked.length && !picked.includes(type)) { picked.push(type); S.settings.assetTypes = picked; }
 
       const saved = isEdit ? S.updateAsset(a.id, payload) : S.addAsset(payload);
       toast(isEdit ? 'Varlık güncellendi.' : 'Varlık eklendi.', 'ok');
@@ -2131,17 +2159,16 @@
             <li><span>Son fiyat güncellemesi</span><b>${c.pricesAt ? esc(S.relTime(c.pricesAt)) : '—'}</b></li>
           </ul>
           <div style="margin-top:12px">
-            <div class="switch-row"><div><strong style="font-size:13.5px">Kurları otomatik çek</strong>
-              <p>open.er-api.com üzerinden 6 saatte bir güncellenir.</p></div>
-              <label class="switch"><input type="checkbox" id="sRates" ${st.autoRates ? 'checked' : ''}><i></i></label></div>
-            <div class="switch-row"><div><strong style="font-size:13.5px">Piyasa fiyatlarını otomatik çek</strong>
-              <p>“Otomatik fiyat” işaretli varlıklar güncellenir: altın/gümüş kapalıçarşı fiyatı
-                 (finans.truncgil.com), kripto CoinGecko üzerinden.</p></div>
-              <label class="switch"><input type="checkbox" id="sPrices" ${st.autoPrices ? 'checked' : ''}><i></i></label></div>
+            <p class="muted" style="font-size:12.5px;margin:0 0 12px">
+              Döviz kurları (open.er-api.com, 6 saatte bir) ve “otomatik fiyat” işaretli varlıkların
+              piyasa fiyatı (altın/gümüş kapalıçarşı · finans.truncgil.com, kripto · CoinGecko)
+              <b>her zaman</b> çekilir. Bu istekler kişisel veri taşımaz, kapatılmalarına gerek yoktur;
+              tek tek varlıklarda çekimi kapatmak için varlığın “Fiyatı otomatik güncelle” anahtarını kullanın.</p>
             <div class="switch-row"><div><strong style="font-size:13.5px">Hisse / ETF fiyatlarını çek</strong>
-              <p>Yahoo Finance verisi, tarayıcıdan doğrudan erişilemediği için <b>r.jina.ai</b> okuma
-                 vekili üzerinden alınır. Yalnızca hisse sembolü (örn. THYAO.IS) bu servise gider;
-                 portföyünüz veya kişisel bilginiz gönderilmez. Kapalıyken hisse değerlerini elle girersiniz.</p></div>
+              <p>Yahoo Finance verisi, tarayıcıdan doğrudan erişilemediği için bir okuma vekili
+                 (<b>r.jina.ai</b>, olmazsa allorigins / corsproxy) üzerinden alınır. Yalnızca hisse
+                 sembolü (örn. THYAO.IS) bu servise gider; portföyünüz veya kişisel bilginiz
+                 gönderilmez. Kapalıyken hisse değerlerini elle girersiniz.</p></div>
               <label class="switch"><input type="checkbox" id="sStock" ${st.stockPrices ? 'checked' : ''}><i></i></label></div>
           </div>
           <p class="section-label" style="margin-top:18px">Kurlar (1 birim kaç TRY?)</p>
@@ -2197,7 +2224,16 @@
           <ul class="stat-list" style="margin-top:16px">
             <li><span>Durum</span><b>${st.onboarded ? 'Tamamlandı' : 'Henüz yapılmadı'}</b></li>
             <li><span>Mevcut varlık</span><b>${S.assets.length}</b></li>
+            <li><span>Formda gösterilen türler</span><b>${(st.assetTypes || []).length
+              ? esc((st.assetTypes || []).map(id => DATA.assetType(id).name).join(', '))
+              : 'tümü (' + DATA.ASSET_TYPES.length + ')'}</b></li>
           </ul>
+          <p class="muted" style="font-size:12px;margin:10px 0 0">
+            Yeni varlık formunda yalnızca testte seçtiğiniz türler görünür; diğerlerine
+            “+N tür daha” düğmesiyle ulaşabilirsiniz.</p>
+          ${(st.assetTypes || []).length ? `<div class="chip-row" style="margin-top:10px">
+            <button class="btn btn-sm btn-ghost" data-act="allTypes">Tüm türleri göster</button>
+          </div>` : ''}
         </div>
 
         <div class="card">
@@ -2281,7 +2317,7 @@
             <li><span>Sunucuya gönderim</span><b>Yok</b></li>
             <li><span>Dış istekler</span><b>Kur, fiyat, banka listesi</b></li>
             <li><span>Çevrimdışı çalışma</span><b>Etkin (PWA)</b></li>
-            <li><span>Sürüm</span><b>1.0.0</b></li>
+            <li><span>Sürüm</span><b>2.4.0</b></li>
           </ul>
           <p class="hl" style="margin-top:14px">
             Hesap numarası, IBAN, şifre veya cüzdan anahtarı gibi bilgileri buraya girmeyin.
@@ -2302,8 +2338,6 @@
     on('#sCompact', 'change', e => { st.compactNumbers = e.target.checked; S.save(); navigate(); });
     on('#sSplash', 'change', e => { st.showSplash = e.target.checked; S.save(); });
     on('#sBackupRem', 'change', e => { st.backupReminder = e.target.checked; S.save(); });
-    on('#sRates', 'change', e => { st.autoRates = e.target.checked; S.save(); });
-    on('#sPrices', 'change', e => { st.autoPrices = e.target.checked; S.save(); });
     on('#sStock', 'change', e => {
       st.stockPrices = e.target.checked; S.save();
       if (e.target.checked) toast('Hisse fiyatları açıldı. Sembolleri girip “Şimdi yenile” deyin.', 'ok');
@@ -2347,6 +2381,10 @@
       if (act === 'expTx') download('gecmis.csv', S.exportTxCSV(), 'text/csv');
       if (act === 'expSales') download('satislar.csv', S.exportSalesCSV(), 'text/csv');
       if (act === 'onboard') Onboard.open(appUI);
+      if (act === 'allTypes') {
+        st.assetTypes = []; S.save();
+        toast('Varlık formunda tüm türler gösterilecek.', 'ok'); navigate();
+      }
       if (act === 'diag') await runDiagnostics(root);
       if (act === 'pinOn') await setupPin();
       if (act === 'pinOff') await removePin();
